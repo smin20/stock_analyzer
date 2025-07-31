@@ -149,16 +149,16 @@ def get_analyzer(version="v3"):  # 버전을 업데이트하여 캐시 무효화
 
 analyzer = get_analyzer()
 
-# 사이드바에 API 상태 표시
-with st.sidebar:
-    st.markdown("### 🔧 시스템 상태")
+# # 사이드바에 API 상태 표시
+# with st.sidebar:
+#     st.markdown("### 🔧 시스템 상태")
     
-    if analyzer.gemini_available:
-        st.success("🤖 Gemini AI: 활성화")
-        st.info("✨ 자연어 분석 기능 사용 가능")
-    else:
-        st.warning("🤖 Gemini AI: 비활성화")
-        st.info("기본 분석 기능만 사용 가능")
+#     if analyzer.gemini_available:
+#         st.success("🤖 Gemini AI: 활성화")
+#         st.info("✨ 자연어 분석 기능 사용 가능")
+#     else:
+#         st.warning("🤖 Gemini AI: 비활성화")
+#         st.info("기본 분석 기능만 사용 가능")
 
 # 메인 헤더
 st.markdown('<h1 class="main-header"> 미국 주식 분석기</h1>', unsafe_allow_html=True)
