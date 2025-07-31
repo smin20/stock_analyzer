@@ -2,4 +2,6 @@ yfinance
 pandas
 numpy
 streamlit
-plotly 
+plotly
+google-generativeai
+python-dotenv

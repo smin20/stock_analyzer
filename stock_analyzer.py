@@ -3,14 +3,106 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import warnings
+import os
+import json
+import re
+import pickle
+from pathlib import Path
+import google.generativeai as genai
+from dotenv import load_dotenv
 warnings.filterwarnings('ignore')
 
+# 환경변수 로드
+load_dotenv()
+
 class StockAnalyzer:
-    def __init__(self):
+    def __init__(self, cache_dir="stock_cache", cache_days=1):
         self.stock_data = {}
+        self.cache_dir = Path(cache_dir)
+        self.cache_days = cache_days
         
-    def get_stock_info(self, ticker):
-        """주식 기본 정보 및 재무 데이터 수집"""
+        # 캐시 디렉토리 생성
+        self.cache_dir.mkdir(exist_ok=True)
+        
+        # Gemini API 초기화
+        try:
+            api_key = os.getenv('GEMINI_API_KEY')
+            if api_key and api_key != 'your_gemini_api_key_here':
+                genai.configure(api_key=api_key)
+                self.model = genai.GenerativeModel('gemini-2.5-flash')
+                self.gemini_available = True
+            else:
+                self.gemini_available = False
+                print("Gemini API 키가 설정되지 않았습니다. 자연어 분석 기능이 비활성화됩니다.")
+        except Exception as e:
+            self.gemini_available = False
+            print(f"Gemini API 초기화 실패: {e}")
+    
+    def _get_cache_path(self, ticker, data_type="info"):
+        """캐시 파일 경로 생성"""
+        return self.cache_dir / f"{ticker}_{data_type}.pkl"
+    
+    def _is_cache_valid(self, cache_path):
+        """캐시 파일이 유효한지 확인 (날짜 기준)"""
+        if not cache_path.exists():
+            return False
+        
+        file_time = datetime.fromtimestamp(cache_path.stat().st_mtime)
+        return datetime.now() - file_time < timedelta(days=self.cache_days)
+    
+    def _save_to_cache(self, ticker, data, data_type="info"):
+        """데이터를 캐시 파일로 저장"""
+        try:
+            cache_path = self._get_cache_path(ticker, data_type)
+            with open(cache_path, 'wb') as f:
+                pickle.dump(data, f)
+        except Exception as e:
+            print(f"캐시 저장 실패 ({ticker}): {e}")
+    
+    def _load_from_cache(self, ticker, data_type="info"):
+        """캐시 파일에서 데이터 로드"""
+        try:
+            cache_path = self._get_cache_path(ticker, data_type)
+            if self._is_cache_valid(cache_path):
+                with open(cache_path, 'rb') as f:
+                    return pickle.load(f)
+        except Exception as e:
+            print(f"캐시 로드 실패 ({ticker}): {e}")
+        return None
+    
+    def preload_tickers(self, tickers, show_progress=True):
+        """여러 종목의 데이터를 미리 로드하여 캐시에 저장"""
+        print(f"📦 {len(tickers)}개 종목 데이터 캐싱 중...")
+        
+        loaded_count = 0
+        cached_count = 0
+        failed_count = 0
+        
+        for i, ticker in enumerate(tickers):
+            if show_progress and (i + 1) % 10 == 0:
+                print(f"진행상황: {i + 1}/{len(tickers)} ({(i + 1)/len(tickers)*100:.1f}%)")
+            
+            # 캐시에서 확인
+            cached_data = self._load_from_cache(ticker)
+            if cached_data:
+                self.stock_data[ticker] = cached_data
+                cached_count += 1
+                continue
+            
+            # API에서 새로 로드
+            if self._fetch_and_cache_stock_data(ticker):
+                loaded_count += 1
+            else:
+                failed_count += 1
+        
+        print(f"✅ 캐싱 완료!")
+        print(f"   📁 캐시에서 로드: {cached_count}개")
+        print(f"   🌐 API에서 로드: {loaded_count}개")
+        print(f"   ❌ 실패: {failed_count}개")
+        print(f"   🚀 총 사용 가능: {len(self.stock_data)}개")
+    
+    def _fetch_and_cache_stock_data(self, ticker):
+        """단일 종목 데이터를 API에서 가져와서 캐시에 저장"""
         try:
             stock = yf.Ticker(ticker)
             
@@ -25,19 +117,82 @@ class StockAnalyzer:
             # 주가 데이터 (최근 1년)
             hist_data = stock.history(period="1y")
             
-            self.stock_data[ticker] = {
+            stock_data = {
                 'info': info,
                 'financials': financials,
                 'balance_sheet': balance_sheet,
                 'cash_flow': cash_flow,
-                'price_history': hist_data
+                'price_history': hist_data,
+                'last_updated': datetime.now()
             }
+            
+            # 메모리와 캐시에 저장
+            self.stock_data[ticker] = stock_data
+            self._save_to_cache(ticker, stock_data)
             
             return True
             
         except Exception as e:
             print(f"데이터 수집 실패 ({ticker}): {e}")
             return False
+    
+    def get_stock_info(self, ticker):
+        """주식 기본 정보 및 재무 데이터 수집 (캐시 우선 사용)"""
+        # 이미 메모리에 로드되어 있는지 확인
+        if ticker in self.stock_data:
+            return True
+        
+        # 캐시에서 로드 시도
+        cached_data = self._load_from_cache(ticker)
+        if cached_data:
+            self.stock_data[ticker] = cached_data
+            return True
+        
+        # 캐시에 없으면 API에서 가져와서 캐시에 저장
+        return self._fetch_and_cache_stock_data(ticker)
+    
+    def get_cache_info(self):
+        """캐시 상태 정보 반환"""
+        cache_files = list(self.cache_dir.glob("*.pkl"))
+        valid_cache = []
+        expired_cache = []
+        
+        for cache_file in cache_files:
+            if self._is_cache_valid(cache_file):
+                valid_cache.append(cache_file)
+            else:
+                expired_cache.append(cache_file)
+        
+        return {
+            'cache_dir': str(self.cache_dir),
+            'total_files': len(cache_files),
+            'valid_files': len(valid_cache),
+            'expired_files': len(expired_cache),
+            'cache_days': self.cache_days,
+            'memory_loaded': len(self.stock_data)
+        }
+    
+    def clear_cache(self, expired_only=True):
+        """캐시 파일 정리"""
+        cache_files = list(self.cache_dir.glob("*.pkl"))
+        deleted_count = 0
+        
+        for cache_file in cache_files:
+            should_delete = not expired_only or not self._is_cache_valid(cache_file)
+            if should_delete:
+                try:
+                    cache_file.unlink()
+                    deleted_count += 1
+                except Exception as e:
+                    print(f"캐시 파일 삭제 실패 {cache_file}: {e}")
+        
+        if expired_only:
+            print(f"만료된 캐시 {deleted_count}개 파일을 삭제했습니다.")
+        else:
+            print(f"모든 캐시 {deleted_count}개 파일을 삭제했습니다.")
+            self.stock_data.clear()  # 메모리도 초기화
+        
+        return deleted_count
     
     def calculate_financial_ratios(self, ticker):
         """주요 재무비율 계산"""
@@ -125,9 +280,9 @@ class StockAnalyzer:
         # 배당수익률 점수 (안정성 지표로 활용)
         dividend_yield = ratios.get('배당수익률', 'N/A')
         if dividend_yield != 'N/A' and dividend_yield is not None:
-            if dividend_yield > 0.03:  # 3% 이상
+            if dividend_yield > 3.0:  # 3% 이상
                 score += 15
-            elif dividend_yield > 0.02:  # 2% 이상
+            elif dividend_yield > 2.0:  # 2% 이상
                 score += 10
                 
         return max(0, min(100, score))
@@ -321,13 +476,13 @@ class StockAnalyzer:
         dividend_yield = ratios.get('배당수익률', 'N/A')
         
         if dividend_yield != 'N/A' and dividend_yield is not None:
-            if dividend_yield > 0.05:  # 5% 이상
+            if dividend_yield > 5.0:  # 5% 이상
                 score += 40
-            elif dividend_yield > 0.04:  # 4% 이상
+            elif dividend_yield > 4.0:  # 4% 이상
                 score += 30
-            elif dividend_yield > 0.03:  # 3% 이상
+            elif dividend_yield > 3.0:  # 3% 이상
                 score += 20
-            elif dividend_yield > 0.02:  # 2% 이상
+            elif dividend_yield > 2.0:  # 2% 이상
                 score += 10
             else:
                 score -= 10
@@ -465,6 +620,400 @@ class StockAnalyzer:
             print(f"\n📈 52주 기준:")
             print(f"   최고가 대비: {ratios.get('52주_고점대비', 'N/A')}%")
             print(f"   최저가 대비: {ratios.get('52주_저점대비', 'N/A')}%")
+    
+    def get_company_description(self, ticker):
+        """Gemini AI를 사용한 회사 설명 생성"""
+        if not self.gemini_available:
+            return "Gemini API가 설정되지 않아 회사 설명을 생성할 수 없습니다."
+        
+        try:
+            prompt = f"""
+{ticker} 종목에 대해서 간단하고 명확한 회사 설명을 3-4줄로 작성해주세요.
+
+다음 내용을 포함해주세요:
+1. 회사의 주요 사업 분야
+2. 어떤 제품이나 서비스를 제공하는지
+3. 업계에서의 위치나 특징
+
+한국어로 작성하고, 투자자가 이해하기 쉽게 간결하고 명확하게 설명해주세요.
+예시 형태: "Apple Inc.(AAPL)은 아이폰, 맥, 아이패드 등의 혁신적인 전자제품을 설계, 제조, 판매하는 글로벌 기술 기업입니다. iOS와 macOS 운영체제, App Store 등의 소프트웨어 플랫폼도 운영하며, 전 세계적으로 강력한 브랜드 충성도를 보유하고 있습니다."
+
+{ticker} 회사 설명:
+"""
+            
+            response = self.model.generate_content(prompt)
+            response_text = response.text.strip()
+            
+            # 응답이 너무 길면 줄여서 반환
+            lines = response_text.split('\n')
+            filtered_lines = [line.strip() for line in lines if line.strip() and not line.strip().startswith('##')]
+            
+            if len(filtered_lines) > 4:
+                filtered_lines = filtered_lines[:4]
+            
+            return ' '.join(filtered_lines)
+            
+        except Exception as e:
+            print(f"❌ Gemini API 회사 설명 생성 실패: {e}")
+            return f"{ticker} 종목에 대한 상세 정보를 불러오는 중 오류가 발생했습니다."
+
+    def analyze_natural_language_strategy(self, user_input):
+        """Gemini AI를 사용한 투자 전략 분석 (LLM 전용)"""
+        if not self.gemini_available:
+            return {
+                "strategy_name": "API 없음",
+                "criteria": {},
+                "weights": {"value_focus": 25, "growth_focus": 25, "dividend_focus": 25, "quality_focus": 25},
+                "description": "Gemini API가 설정되지 않았습니다. .env 파일에 GEMINI_API_KEY를 설정해주세요."
+            }
+        
+        try:
+            prompt = f"""
+당신은 전문 투자 분석가입니다. 다음 사용자의 투자 전략을 정밀하게 분석하여 정확한 수치로 변환해주세요.
+
+사용자 입력: "{user_input}"
+
+다음 JSON 형태로만 응답하세요 (코드블록, 설명, 주석 없이 순수 JSON만):
+{{
+    "strategy_name": "분석된 전략명",
+    "criteria": {{
+        "per_max": null or 숫자,
+        "per_min": null or 숫자,
+        "pbr_max": null or 숫자,
+        "pbr_min": null or 숫자,
+        "roe_min": null or 0.0-1.0 사이 소수 (예: 0.15는 15%),
+        "roa_min": null or 0.0-1.0 사이 소수,
+        "dividend_min": null or 0.0-1.0 사이 소수 (예: 0.045는 4.5%),
+        "debt_ratio_max": null or 0.0-1.0 사이 소수,
+        "market_cap_min": null or 숫자 (십억달러 단위),
+        "price_to_52week_high_min": null or 0.0-1.0 사이 소수
+    }},
+    "weights": {{
+        "value_focus": 0-100 정수,
+        "growth_focus": 0-100 정수,
+        "dividend_focus": 0-100 정수,
+        "quality_focus": 0-100 정수
+    }},
+    "description": "추출된 전략 요약"
+}}
+
+*** 중요한 수치 변환 규칙 ***
+- 배당수익률: "4.5%" → dividend_min: 0.045
+- 배당수익률: "3%" → dividend_min: 0.03
+- 배당수익률: "6%" → dividend_min: 0.06
+- ROE: "20%" → roe_min: 0.2
+- ROE: "15%" → roe_min: 0.15
+- ROA: "8%" → roa_min: 0.08
+- 부채비율: "60%" → debt_ratio_max: 0.6
+
+*** 정확한 예시 ***
+1. "배당수익률 3% 이상인 안정 대형주"
+   → {{"dividend_min": 0.03, "market_cap_min": 50, "debt_ratio_max": 0.6}}
+
+2. "PER 12 이하, 배당 2.5% 이상"
+   → {{"per_max": 12, "dividend_min": 0.025}}
+
+3. "ROE 15% 이상, 배당수익률 3% 이상인 우량주"
+   → {{"roe_min": 0.15, "dividend_min": 0.03, "debt_ratio_max": 0.5}}
+
+*** 현실적인 기준 가이드 ***
+- 배당수익률: 미국 대형주는 보통 2-4% (REITs 제외)
+- 시가총액: 중형주 50억$, 대형주 100억$, 초대형주 500억$ 이상
+- "시가총액이 큰" = 100억$ 이상, "매우 큰" = 500억$ 이상으로 해석
+- ROE: 우수한 기업은 15% 이상, 매우 우수한 기업은 20% 이상
+- PER: 적정한 PER은 업종에 따라 다르지만 보통 10-25배
+- 안정적인 배당주는 보통 배당수익률 2.5-4%, 시총 50억$ 이상
+
+퍼센트(%)를 소수로 정확히 변환하는 것이 가장 중요합니다!
+"""
+            
+            response = self.model.generate_content(prompt)
+            response_text = response.text.strip()
+            
+            # 코드 블록 제거
+            if '```json' in response_text:
+                response_text = response_text.split('```json')[1].split('```')[0]
+            elif '```' in response_text:
+                response_text = response_text.split('```')[1].split('```')[0]
+            
+            # JSON 파싱
+            strategy_config = json.loads(response_text)
+            
+            # 검증 및 보정
+            if 'criteria' not in strategy_config:
+                strategy_config['criteria'] = {}
+            if 'weights' not in strategy_config:
+                strategy_config['weights'] = {"value_focus": 25, "growth_focus": 25, "dividend_focus": 25, "quality_focus": 25}
+            
+            # weights 합계가 100이 되도록 조정
+            total_weight = sum(strategy_config['weights'].values())
+            if total_weight > 0:
+                for key in strategy_config['weights']:
+                    strategy_config['weights'][key] = int(strategy_config['weights'][key] * 100 / total_weight)
+            
+            print(f"✅ Gemini 분석 성공: {strategy_config.get('strategy_name', '커스텀 전략')}")
+            return strategy_config
+            
+        except json.JSONDecodeError as e:
+            print(f"❌ JSON 파싱 오류: {e}")
+            print(f"응답 텍스트: {response_text[:200]}...")
+            return None
+            
+        except Exception as e:
+            print(f"❌ Gemini API 분석 실패: {e}")
+            return None
+    
+
+    def _meets_required_criteria(self, ratios, strategy_config):
+        """필수 조건을 만족하는지 체크"""
+        criteria = strategy_config.get('criteria', {})
+        
+        # PER 최대값 체크
+        if 'per_max' in criteria and criteria['per_max'] is not None:
+            per = ratios.get('PER', 'N/A')
+            if per == 'N/A' or per is None or per <= 0 or per > criteria['per_max']:
+                return False
+        
+        # PER 최소값 체크
+        if 'per_min' in criteria and criteria['per_min'] is not None:
+            per = ratios.get('PER', 'N/A')
+            if per == 'N/A' or per is None or per <= 0 or per < criteria['per_min']:
+                return False
+        
+        # PBR 최대값 체크
+        if 'pbr_max' in criteria and criteria['pbr_max'] is not None:
+            pbr = ratios.get('PBR', 'N/A')
+            if pbr == 'N/A' or pbr is None or pbr <= 0 or pbr > criteria['pbr_max']:
+                return False
+        
+        # PBR 최소값 체크
+        if 'pbr_min' in criteria and criteria['pbr_min'] is not None:
+            pbr = ratios.get('PBR', 'N/A')
+            if pbr == 'N/A' or pbr is None or pbr <= 0 or pbr < criteria['pbr_min']:
+                return False
+        
+        # ROE 최소값 체크
+        if 'roe_min' in criteria and criteria['roe_min'] is not None:
+            roe = ratios.get('ROE', 'N/A')
+            if roe == 'N/A' or roe is None or roe < criteria['roe_min']:
+                return False
+        
+        # ROA 최소값 체크
+        if 'roa_min' in criteria and criteria['roa_min'] is not None:
+            roa = ratios.get('ROA', 'N/A')
+            if roa == 'N/A' or roa is None or roa < criteria['roa_min']:
+                return False
+        
+        # 배당수익률 최소값 체크 (퍼센트 단위)
+        if 'dividend_min' in criteria and criteria['dividend_min'] is not None:
+            dividend = ratios.get('배당수익률', 'N/A')
+            dividend_min_percent = criteria['dividend_min'] * 100  # 소수를 퍼센트로 변환
+            if dividend == 'N/A' or dividend is None or dividend < dividend_min_percent:
+                return False
+        
+        # 부채비율 최대값 체크
+        if 'debt_ratio_max' in criteria and criteria['debt_ratio_max'] is not None:
+            debt_ratio = ratios.get('부채비율', 'N/A')
+            if debt_ratio == 'N/A' or debt_ratio is None:
+                return False, "부채비율 데이터 없음"
+            # criteria의 debt_ratio_max는 소수 형태(0.6)이므로 100을 곱해서 퍼센트로 변환
+            debt_ratio_max_percent = criteria['debt_ratio_max'] * 100
+            if debt_ratio > debt_ratio_max_percent:
+                return False, f"부채비율 높음 ({debt_ratio:.1f}% > {debt_ratio_max_percent:.1f}%)"
+        
+        # 시가총액 최소값 체크 (십억 달러 단위)
+        if 'market_cap_min' in criteria and criteria['market_cap_min'] is not None:
+            market_cap = ratios.get('시가총액', 'N/A')
+            if market_cap == 'N/A' or market_cap is None:
+                return False, "시가총액 데이터 없음"
+            market_cap_b = market_cap / 1e9  # 십억 단위로 변환
+            if market_cap_b < criteria['market_cap_min']:
+                return False, f"시가총액 작음 (${market_cap_b:.1f}B < ${criteria['market_cap_min']:.1f}B)"
+        
+        # 52주 최고가 대비 현재가 최소값 체크
+        if 'price_to_52week_high_min' in criteria and criteria['price_to_52week_high_min'] is not None:
+            price_ratio = ratios.get('52주_고점대비', 'N/A')
+            if price_ratio == 'N/A' or price_ratio is None:
+                return False, "52주 가격비율 데이터 없음"
+            if price_ratio / 100 < criteria['price_to_52week_high_min']:
+                return False, f"52주 가격비율 낮음 ({price_ratio:.1f}% < {criteria['price_to_52week_high_min']*100:.1f}%)"
+        
+        return True, "모든 조건 만족"  # 모든 조건을 만족함
+    
+    def _meets_required_criteria_with_reason(self, ratios, strategy_config):
+        """필수 조건을 만족하는지 체크하고 실패 이유도 반환"""
+        criteria = strategy_config.get('criteria', {})
+        
+        # PER 최대값 체크
+        if 'per_max' in criteria and criteria['per_max'] is not None:
+            per = ratios.get('PER', 'N/A')
+            if per == 'N/A' or per is None or per <= 0:
+                return False, "PER 데이터 없음"
+            if per > criteria['per_max']:
+                return False, f"PER 높음 ({per:.1f} > {criteria['per_max']})"
+        
+        # PER 최소값 체크
+        if 'per_min' in criteria and criteria['per_min'] is not None:
+            per = ratios.get('PER', 'N/A')
+            if per == 'N/A' or per is None or per <= 0:
+                return False, "PER 데이터 없음"
+            if per < criteria['per_min']:
+                return False, f"PER 낮음 ({per:.1f} < {criteria['per_min']})"
+        
+        # PBR 최대값 체크
+        if 'pbr_max' in criteria and criteria['pbr_max'] is not None:
+            pbr = ratios.get('PBR', 'N/A')
+            if pbr == 'N/A' or pbr is None or pbr <= 0:
+                return False, "PBR 데이터 없음"
+            if pbr > criteria['pbr_max']:
+                return False, f"PBR 높음 ({pbr:.1f} > {criteria['pbr_max']})"
+        
+        # PBR 최소값 체크
+        if 'pbr_min' in criteria and criteria['pbr_min'] is not None:
+            pbr = ratios.get('PBR', 'N/A')
+            if pbr == 'N/A' or pbr is None or pbr <= 0:
+                return False, "PBR 데이터 없음"
+            if pbr < criteria['pbr_min']:
+                return False, f"PBR 낮음 ({pbr:.1f} < {criteria['pbr_min']})"
+        
+        # ROE 최소값 체크
+        if 'roe_min' in criteria and criteria['roe_min'] is not None:
+            roe = ratios.get('ROE', 'N/A')
+            if roe == 'N/A' or roe is None:
+                return False, "ROE 데이터 없음"
+            if roe < criteria['roe_min']:
+                return False, f"ROE 낮음 ({roe*100:.1f}% < {criteria['roe_min']*100:.1f}%)"
+        
+        # ROA 최소값 체크
+        if 'roa_min' in criteria and criteria['roa_min'] is not None:
+            roa = ratios.get('ROA', 'N/A')
+            if roa == 'N/A' or roa is None:
+                return False, "ROA 데이터 없음"
+            if roa < criteria['roa_min']:
+                return False, f"ROA 낮음 ({roa*100:.1f}% < {criteria['roa_min']*100:.1f}%)"
+        
+        # 배당수익률 최소값 체크 (퍼센트 단위)
+        if 'dividend_min' in criteria and criteria['dividend_min'] is not None:
+            dividend = ratios.get('배당수익률', 'N/A')
+            dividend_min_percent = criteria['dividend_min'] * 100  # 소수를 퍼센트로 변환
+            if dividend == 'N/A' or dividend is None:
+                return False, "배당수익률 데이터 없음"
+            if dividend < dividend_min_percent:
+                return False, f"배당수익률 낮음 ({dividend:.2f}% < {dividend_min_percent:.2f}%)"
+        
+        # 부채비율 최대값 체크
+        if 'debt_ratio_max' in criteria and criteria['debt_ratio_max'] is not None:
+            debt_ratio = ratios.get('부채비율', 'N/A')
+            if debt_ratio == 'N/A' or debt_ratio is None:
+                return False, "부채비율 데이터 없음"
+            # criteria의 debt_ratio_max는 소수 형태(0.6)이므로 100을 곱해서 퍼센트로 변환
+            debt_ratio_max_percent = criteria['debt_ratio_max'] * 100
+            if debt_ratio > debt_ratio_max_percent:
+                return False, f"부채비율 높음 ({debt_ratio:.1f}% > {debt_ratio_max_percent:.1f}%)"
+        
+        # 시가총액 최소값 체크 (십억 달러 단위)
+        if 'market_cap_min' in criteria and criteria['market_cap_min'] is not None:
+            market_cap = ratios.get('시가총액', 'N/A')
+            if market_cap == 'N/A' or market_cap is None:
+                return False, "시가총액 데이터 없음"
+            market_cap_b = market_cap / 1e9  # 십억 단위로 변환
+            if market_cap_b < criteria['market_cap_min']:
+                return False, f"시가총액 작음 (${market_cap_b:.1f}B < ${criteria['market_cap_min']:.1f}B)"
+        
+        # 52주 최고가 대비 현재가 최소값 체크
+        if 'price_to_52week_high_min' in criteria and criteria['price_to_52week_high_min'] is not None:
+            price_ratio = ratios.get('52주_고점대비', 'N/A')
+            if price_ratio == 'N/A' or price_ratio is None:
+                return False, "52주 가격비율 데이터 없음"
+            if price_ratio / 100 < criteria['price_to_52week_high_min']:
+                return False, f"52주 가격비율 낮음 ({price_ratio:.1f}% < {criteria['price_to_52week_high_min']*100:.1f}%)"
+        
+        return True, "모든 조건 만족"  # 모든 조건을 만족함
+    
+    def _calculate_custom_strategy_score(self, ratios, strategy_config):
+        """커스텀 전략에 따른 점수 계산"""
+        score = 50  # 기본 점수
+        criteria = strategy_config.get('criteria', {})
+        weights = strategy_config.get('weights', {})
+        
+        # 각 기준별 점수 계산
+        
+        # PER 기준
+        per = ratios.get('PER', 'N/A')
+        if per != 'N/A' and per is not None and per > 0:
+            if 'per_max' in criteria and criteria['per_max']:
+                if per <= criteria['per_max']:
+                    score += 20 * (weights.get('value_focus', 25) / 100)
+                elif per > criteria['per_max'] * 1.5:
+                    score -= 15
+            
+            if 'per_min' in criteria and criteria['per_min']:
+                if per >= criteria['per_min']:
+                    score += 15 * (weights.get('value_focus', 25) / 100)
+        
+        # PBR 기준
+        pbr = ratios.get('PBR', 'N/A')
+        if pbr != 'N/A' and pbr is not None and pbr > 0:
+            if 'pbr_max' in criteria and criteria['pbr_max']:
+                if pbr <= criteria['pbr_max']:
+                    score += 15 * (weights.get('value_focus', 25) / 100)
+                elif pbr > criteria['pbr_max'] * 1.5:
+                    score -= 10
+        
+        # ROE 기준
+        roe = ratios.get('ROE', 'N/A')
+        if roe != 'N/A' and roe is not None:
+            if 'roe_min' in criteria and criteria['roe_min']:
+                if roe >= criteria['roe_min']:
+                    score += 25 * (weights.get('quality_focus', 25) / 100)
+                elif roe < criteria['roe_min'] * 0.7:
+                    score -= 20
+        
+        # ROA 기준
+        roa = ratios.get('ROA', 'N/A')
+        if roa != 'N/A' and roa is not None:
+            if 'roa_min' in criteria and criteria['roa_min']:
+                if roa >= criteria['roa_min']:
+                    score += 15 * (weights.get('quality_focus', 25) / 100)
+        
+        # 배당 기준
+        dividend = ratios.get('배당수익률', 'N/A')
+        if dividend != 'N/A' and dividend is not None:
+            if 'dividend_min' in criteria and criteria['dividend_min']:
+                # criteria의 dividend_min은 소수점 형태(0.03)이므로 100을 곱해서 퍼센트로 변환
+                dividend_min_percent = criteria['dividend_min'] * 100
+                if dividend >= dividend_min_percent:
+                    score += 30 * (weights.get('dividend_focus', 25) / 100)
+                elif dividend < dividend_min_percent * 0.5:
+                    score -= 15
+        
+        # 부채비율 기준
+        debt_ratio = ratios.get('부채비율', 'N/A')
+        if debt_ratio != 'N/A' and debt_ratio is not None:
+            if 'debt_ratio_max' in criteria and criteria['debt_ratio_max']:
+                # criteria의 debt_ratio_max는 소수 형태(0.6)이므로 100을 곱해서 퍼센트로 변환
+                debt_ratio_max_percent = criteria['debt_ratio_max'] * 100
+                if debt_ratio <= debt_ratio_max_percent:
+                    score += 15 * (weights.get('quality_focus', 25) / 100)
+                elif debt_ratio > debt_ratio_max_percent * 1.5:
+                    score -= 20
+        
+        # 시가총액 기준 (십억 달러 단위)
+        market_cap = ratios.get('시가총액', 'N/A')
+        if market_cap != 'N/A' and market_cap is not None:
+            market_cap_b = market_cap / 1e9  # 십억 단위로 변환
+            if 'market_cap_min' in criteria and criteria['market_cap_min']:
+                if market_cap_b >= criteria['market_cap_min']:
+                    score += 10 * (weights.get('quality_focus', 25) / 100)
+        
+        # 52주 최고가 대비 현재가 기준
+        price_ratio = ratios.get('52주_고점대비', 'N/A')
+        if price_ratio != 'N/A' and price_ratio is not None:
+            if 'price_to_52week_high_min' in criteria and criteria['price_to_52week_high_min']:
+                if price_ratio / 100 >= criteria['price_to_52week_high_min']:
+                    score += 15 * (weights.get('growth_focus', 25) / 100)
+        
+        return max(0, min(100, score))
 
 def main():
     """메인 실행 함수"""
