@@ -139,10 +139,47 @@ st.markdown("""
 
 # 애플리케이션 초기화
 @st.cache_resource
-def get_analyzer(version="v2"):  # 버전을 추가하여 캐시 무효화
-    return StockAnalyzer()
+def get_analyzer(version="v3"):  # 버전을 업데이트하여 캐시 무효화
+    # Streamlit Cloud secrets에서 API 키 가져오기
+    try:
+        api_key = st.secrets.get("GEMINI_API_KEY", None)
+        if api_key:
+            st.success("🔑 Gemini API 키를 성공적으로 불러왔습니다!")
+        return StockAnalyzer(api_key=api_key)
+    except Exception as e:
+        st.warning(f"⚠️ Secrets 접근 실패, 로컬 환경변수 사용: {e}")
+        return StockAnalyzer()
 
 analyzer = get_analyzer()
+
+# 사이드바에 API 상태 표시
+with st.sidebar:
+    st.markdown("### 🔧 시스템 상태")
+    
+    # API 키 디버깅 정보
+    try:
+        has_secret = "GEMINI_API_KEY" in st.secrets
+        if has_secret:
+            api_key_preview = st.secrets["GEMINI_API_KEY"][:20] + "..." if len(st.secrets["GEMINI_API_KEY"]) > 20 else st.secrets["GEMINI_API_KEY"]
+            st.success(f"🔑 Secrets API 키: 발견됨")
+            st.code(f"키 미리보기: {api_key_preview}")
+        else:
+            st.error("🔑 Secrets API 키: 없음")
+    except Exception as e:
+        st.error(f"🔑 Secrets 접근 오류: {str(e)}")
+    
+    if analyzer.gemini_available:
+        st.success("🤖 Gemini AI: 활성화")
+        st.info("✨ 자연어 분석 기능 사용 가능")
+    else:
+        st.warning("🤖 Gemini AI: 비활성화")
+        st.info("기본 분석 기능만 사용 가능")
+        
+    st.markdown("---")
+    st.markdown("**💡 문제 해결:**")
+    st.markdown("1. Streamlit Cloud Settings → Secrets")
+    st.markdown("2. GEMINI_API_KEY 추가")
+    st.markdown("3. 앱 재시작")
 
 # 메인 헤더
 st.markdown('<h1 class="main-header"> 미국 주식 분석기</h1>', unsafe_allow_html=True)
@@ -960,7 +997,14 @@ with tab3:
         if analyzer.gemini_available:
             st.success("🤖 Gemini AI 준비완료")
         else:
-            st.warning("⚠️ Gemini API 미설정\n키워드 기반 분석 사용")
+            st.error("⚠️ Gemini API 미설정")
+            st.info("""
+            💡 Gemini API를 사용하려면:
+            1. Streamlit Cloud Secrets에 GEMINI_API_KEY 추가
+            2. 또는 로컬에서 .env 파일에 GEMINI_API_KEY 설정
+            
+            현재는 기본 키워드 기반 분석을 사용합니다.
+            """)
     
     # 기본 종목 풀 (100개 주요 종목 - 자동으로 사용)
     ticker_pool_list_tab4 = EXTENDED_TICKERS
