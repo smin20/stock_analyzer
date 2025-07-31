@@ -143,11 +143,8 @@ def get_analyzer(version="v3"):  # 버전을 업데이트하여 캐시 무효화
     # Streamlit Cloud secrets에서 API 키 가져오기
     try:
         api_key = st.secrets.get("GEMINI_API_KEY", None)
-        if api_key:
-            st.success("🔑 Gemini API 키를 성공적으로 불러왔습니다!")
         return StockAnalyzer(api_key=api_key)
     except Exception as e:
-        st.warning(f"⚠️ Secrets 접근 실패, 로컬 환경변수 사용: {e}")
         return StockAnalyzer()
 
 analyzer = get_analyzer()
@@ -156,30 +153,12 @@ analyzer = get_analyzer()
 with st.sidebar:
     st.markdown("### 🔧 시스템 상태")
     
-    # API 키 디버깅 정보
-    try:
-        has_secret = "GEMINI_API_KEY" in st.secrets
-        if has_secret:
-            api_key_preview = st.secrets["GEMINI_API_KEY"][:20] + "..." if len(st.secrets["GEMINI_API_KEY"]) > 20 else st.secrets["GEMINI_API_KEY"]
-            st.success(f"🔑 Secrets API 키: 발견됨")
-            st.code(f"키 미리보기: {api_key_preview}")
-        else:
-            st.error("🔑 Secrets API 키: 없음")
-    except Exception as e:
-        st.error(f"🔑 Secrets 접근 오류: {str(e)}")
-    
     if analyzer.gemini_available:
         st.success("🤖 Gemini AI: 활성화")
         st.info("✨ 자연어 분석 기능 사용 가능")
     else:
         st.warning("🤖 Gemini AI: 비활성화")
         st.info("기본 분석 기능만 사용 가능")
-        
-    st.markdown("---")
-    st.markdown("**💡 문제 해결:**")
-    st.markdown("1. Streamlit Cloud Settings → Secrets")
-    st.markdown("2. GEMINI_API_KEY 추가")
-    st.markdown("3. 앱 재시작")
 
 # 메인 헤더
 st.markdown('<h1 class="main-header"> 미국 주식 분석기</h1>', unsafe_allow_html=True)
@@ -637,8 +616,7 @@ with tab2:
             key="tab2_ticker_selection"
         )
         
-        # 디버깅: 선택된 종목 수 표시
-        st.write(f"**선택된 종목 수:** {len(ticker_pool_list)}개")
+
     
     with col2:
         st.markdown("""
@@ -654,9 +632,6 @@ with tab2:
     # 분석 시작 버튼 (크고 눈에 띄게)
     st.markdown("<br>", unsafe_allow_html=True)
     
-    # 현재 선택된 전략 표시 (디버깅용)
-    st.info(f"현재 선택된 전략: **{strategy_info['name']}**")
-    
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         recommend_btn = st.button(
@@ -666,12 +641,7 @@ with tab2:
             key="tab2_recommend_btn"
         )
     
-    # 디버깅 정보 표시
-    if recommend_btn:
-        st.success("✅ 분석 버튼이 클릭되었습니다!")
-    
-    if not ticker_pool_list:
-        st.warning("⚠️ 종목이 선택되지 않았습니다. 종목을 선택해주세요.")
+
     
     # 기본 전략 분석 처리
     if recommend_btn and ticker_pool_list:
@@ -997,235 +967,221 @@ with tab3:
         if analyzer.gemini_available:
             st.success("🤖 Gemini AI 준비완료")
         else:
-            st.error("⚠️ Gemini API 미설정")
-            st.info("""
-            💡 Gemini API를 사용하려면:
-            1. Streamlit Cloud Secrets에 GEMINI_API_KEY 추가
-            2. 또는 로컬에서 .env 파일에 GEMINI_API_KEY 설정
-            
-            현재는 기본 키워드 기반 분석을 사용합니다.
-            """)
+            st.warning("⚠️ Gemini API 미설정 - 기본 분석 사용")
     
     # 기본 종목 풀 (100개 주요 종목 - 자동으로 사용)
     ticker_pool_list_tab4 = EXTENDED_TICKERS
     
-    # 디버깅 정보 표시
-    if natural_strategy_btn:
-        st.success("✅ AI 전략 분석 버튼이 클릭되었습니다!")
-    
-    if not user_strategy_input.strip():
-        st.warning("⚠️ 투자 전략을 입력해주세요.")
-    
-    st.info(f"**현재 입력된 전략:** {user_strategy_input[:50]}{'...' if len(user_strategy_input) > 50 else ''}")
-    
     # 자연어 전략 분석 처리
-    if natural_strategy_btn and user_strategy_input.strip():
-        with st.spinner("🤖 AI가 당신의 전략을 분석하고 있습니다..."):
-            # 자연어 전략 분석
-            strategy_config = analyzer.analyze_natural_language_strategy(user_strategy_input)
-            
-            if strategy_config:
-                # 분석된 전략 정보 표시
-                st.markdown(f"""
-                <div style="background: linear-gradient(135deg, #e8f5e8, #c8e6c9); 
-                            border-left: 5px solid #28a745; 
-                            padding: 1.5rem; border-radius: 10px; margin: 2rem 0;">
-                    <h3 style="color: #2e7d32; margin-bottom: 1rem;">
-                        🎯 AI 분석 결과: {strategy_config.get('strategy_name', '커스텀 전략')}
-                    </h3>
-                    <p style="font-size: 1.1rem; margin-bottom: 0.5rem; color: #333;">
-                        <strong>전략 설명:</strong> {strategy_config.get('description', '사용자 정의 전략')}
-                    </p>
-                    <p style="color: #666; margin-bottom: 0;">
-                        <strong>분석된 조건:</strong> 
-                        {', '.join([
-                            f"배당수익률: {v*100:.1f}%" if k == 'dividend_min' and v is not None
-                            else f"ROE: {v*100:.1f}%" if k == 'roe_min' and v is not None
-                            else f"ROA: {v*100:.1f}%" if k == 'roa_min' and v is not None  
-                            else f"부채비율: {v*100:.1f}%" if k == 'debt_ratio_max' and v is not None
-                            else f"PER: {v}" if k == 'per_max' and v is not None
-                            else f"PBR: {v}" if k == 'pbr_max' and v is not None
-                            else f"시가총액: ${v}B" if k == 'market_cap_min' and v is not None
-                            else f"{k}: {v}"
-                            for k, v in strategy_config.get('criteria', {}).items() if v is not None
-                        ])}
-                    </p>
-                </div>
-                """, unsafe_allow_html=True)
+    if natural_strategy_btn:
+        if not user_strategy_input.strip():
+            st.warning("⚠️ 투자 전략을 입력해주세요.")
+        else:
+            with st.spinner("🤖 AI가 당신의 전략을 분석하고 있습니다..."):
+                # 자연어 전략 분석
+                strategy_config = analyzer.analyze_natural_language_strategy(user_strategy_input)
                 
-                # 커스텀 전략으로 종목 추천
-                
-                with st.spinner(f"🔍 {len(ticker_pool_list_tab4)}개 종목을 분석하여 최적의 투자 기회를 찾고 있습니다..."):
-                    # 기존 전략 기반 추천 시스템 사용
-                    custom_recommendations = []
-                    for ticker in ticker_pool_list_tab4:
-                        if analyzer.get_stock_info(ticker):
-                            ratios = analyzer.calculate_financial_ratios(ticker)
-                            if ratios:
-                                # 간단한 필터링 조건 적용
-                                meets_criteria = True
-                                criteria = strategy_config.get('criteria', {})
-                                
-                                # 기본적인 조건 체크
-                                if 'dividend_min' in criteria and criteria['dividend_min'] is not None:
-                                    dividend = ratios.get('배당수익률', 'N/A')
-                                    if dividend == 'N/A' or dividend is None or dividend < criteria['dividend_min'] * 100:
-                                        meets_criteria = False
-                                
-                                if meets_criteria:
-                                    score = ratios.get('종합_점수', 50)
-                                    custom_recommendations.append({
-                                        'ticker': ticker,
-                                        'ratios': ratios,
-                                        'score': score
-                                    })
+                if strategy_config:
+                    # 분석된 전략 정보 표시
+                    st.markdown(f"""
+                    <div style="background: linear-gradient(135deg, #e8f5e8, #c8e6c9); 
+                                border-left: 5px solid #28a745; 
+                                padding: 1.5rem; border-radius: 10px; margin: 2rem 0;">
+                        <h3 style="color: #2e7d32; margin-bottom: 1rem;">
+                            🎯 AI 분석 결과: {strategy_config.get('strategy_name', '커스텀 전략')}
+                        </h3>
+                        <p style="font-size: 1.1rem; margin-bottom: 0.5rem; color: #333;">
+                            <strong>전략 설명:</strong> {strategy_config.get('description', '사용자 정의 전략')}
+                        </p>
+                        <p style="color: #666; margin-bottom: 0;">
+                            <strong>분석된 조건:</strong> 
+                            {', '.join([
+                                f"배당수익률: {v*100:.1f}%" if k == 'dividend_min' and v is not None
+                                else f"ROE: {v*100:.1f}%" if k == 'roe_min' and v is not None
+                                else f"ROA: {v*100:.1f}%" if k == 'roa_min' and v is not None  
+                                else f"부채비율: {v*100:.1f}%" if k == 'debt_ratio_max' and v is not None
+                                else f"PER: {v}" if k == 'per_max' and v is not None
+                                else f"PBR: {v}" if k == 'pbr_max' and v is not None
+                                else f"시가총액: ${v}B" if k == 'market_cap_min' and v is not None
+                                else f"{k}: {v}"
+                                for k, v in strategy_config.get('criteria', {}).items() if v is not None
+                            ])}
+                        </p>
+                    </div>
+                    """, unsafe_allow_html=True)
                     
-                    # 점수 순으로 정렬하고 상위 15개만 선택
-                    custom_recommendations.sort(key=lambda x: x['score'], reverse=True)
-                    custom_recommendations = custom_recommendations[:15]
+                    # 커스텀 전략으로 종목 추천
                     
-                    # 항상 결과를 표시하도록 조건문 변경
-                    if True:  # 항상 True로 설정하여 오류 메시지가 나오지 않도록 함
-                        # 결과 헤더
-                        st.markdown(f"""
-                        <div style="text-align: center; margin: 2rem 0;">
-                            <h2 style="background: linear-gradient(135deg, #28a745, #20c997); 
-                                       -webkit-background-clip: text; -webkit-text-fill-color: transparent; 
-                                       font-size: 2rem; font-weight: bold;">
-                                🤖 AI 커스텀 전략 분석 결과
-                            </h2>
-                            <p style="color: #666; font-size: 1.1rem;">
-                                총 {len(custom_recommendations)}개 종목이 당신의 전략에 적합합니다
-                            </p>
-                        </div>
-                        """, unsafe_allow_html=True)
+                    with st.spinner(f"🔍 {len(ticker_pool_list_tab4)}개 종목을 분석하여 최적의 투자 기회를 찾고 있습니다..."):
+                        # 기존 전략 기반 추천 시스템 사용
+                        custom_recommendations = []
+                        for ticker in ticker_pool_list_tab4:
+                            if analyzer.get_stock_info(ticker):
+                                ratios = analyzer.calculate_financial_ratios(ticker)
+                                if ratios:
+                                    # 간단한 필터링 조건 적용
+                                    meets_criteria = True
+                                    criteria = strategy_config.get('criteria', {})
+                                    
+                                    # 기본적인 조건 체크
+                                    if 'dividend_min' in criteria and criteria['dividend_min'] is not None:
+                                        dividend = ratios.get('배당수익률', 'N/A')
+                                        if dividend == 'N/A' or dividend is None or dividend < criteria['dividend_min'] * 100:
+                                            meets_criteria = False
+                                    
+                                    if meets_criteria:
+                                        score = ratios.get('종합_점수', 50)
+                                        custom_recommendations.append({
+                                            'ticker': ticker,
+                                            'ratios': ratios,
+                                            'score': score
+                                        })
                         
-                        # 상위 5개 종목 하이라이트
-                        st.markdown("### 🏆 TOP 5 추천 종목")
+                        # 점수 순으로 정렬하고 상위 15개만 선택
+                        custom_recommendations.sort(key=lambda x: x['score'], reverse=True)
+                        custom_recommendations = custom_recommendations[:15]
                         
-                        cols = st.columns(5)
-                        for i, rec in enumerate(custom_recommendations[:5]):
-                            with cols[i]:
-                                score = rec['score']
-                                ticker = rec['ticker']
+                        # 항상 결과를 표시하도록 조건문 변경
+                        if True:  # 항상 True로 설정하여 오류 메시지가 나오지 않도록 함
+                            # 결과 헤더
+                            st.markdown(f"""
+                            <div style="text-align: center; margin: 2rem 0;">
+                                <h2 style="background: linear-gradient(135deg, #28a745, #20c997); 
+                                           -webkit-background-clip: text; -webkit-text-fill-color: transparent; 
+                                           font-size: 2rem; font-weight: bold;">
+                                    🤖 AI 커스텀 전략 분석 결과
+                                </h2>
+                                <p style="color: #666; font-size: 1.1rem;">
+                                    총 {len(custom_recommendations)}개 종목이 당신의 전략에 적합합니다
+                                </p>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+                            # 상위 5개 종목 하이라이트
+                            st.markdown("### 🏆 TOP 5 추천 종목")
+                            
+                            cols = st.columns(5)
+                            for i, rec in enumerate(custom_recommendations[:5]):
+                                with cols[i]:
+                                    score = rec['score']
+                                    ticker = rec['ticker']
+                                    
+                                    if score >= 80:
+                                        color = "#28a745"
+                                        gradient = "linear-gradient(135deg, #28a745, #20c997)"
+                                        emoji = "🥇" if i == 0 else "🟢"
+                                    elif score >= 60:
+                                        color = "#fd7e14"
+                                        gradient = "linear-gradient(135deg, #fd7e14, #ffc107)"
+                                        emoji = "🟡"
+                                    else:
+                                        color = "#dc3545"
+                                        gradient = "linear-gradient(135deg, #dc3545, #e83e8c)"
+                                        emoji = "🔴"
+                                    
+                                    rank_suffix = ["st", "nd", "rd", "th", "th"][i]
+                                    
+                                    st.markdown(f"""
+                                    <div style="background: {gradient}; color: white; text-align: center; 
+                                                padding: 1.5rem; border-radius: 15px; margin-bottom: 1rem;
+                                                box-shadow: 0 4px 15px rgba(0,0,0,0.2); transform: scale(1.02);">
+                                        <div style="font-size: 1.5rem; margin-bottom: 0.5rem;">{emoji}</div>
+                                        <h3 style="margin: 0.5rem 0; font-size: 1.3rem;">{ticker}</h3>
+                                        <div style="font-size: 2rem; font-weight: bold; margin: 0.5rem 0;">{score:.1f}</div>
+                                        <small style="opacity: 0.9;">{i+1}{rank_suffix} 순위</small>
+                                    </div>
+                                    """, unsafe_allow_html=True)
+                            
+                            # 전체 결과 테이블
+                            st.markdown("### 📊 상세 분석 결과")
+                            
+                            recommendation_data = []
+                            for i, rec in enumerate(custom_recommendations):
+                                ratios = rec['ratios']
                                 
-                                if score >= 80:
-                                    color = "#28a745"
-                                    gradient = "linear-gradient(135deg, #28a745, #20c997)"
-                                    emoji = "🥇" if i == 0 else "🟢"
-                                elif score >= 60:
-                                    color = "#fd7e14"
-                                    gradient = "linear-gradient(135deg, #fd7e14, #ffc107)"
-                                    emoji = "🟡"
-                                else:
-                                    color = "#dc3545"
-                                    gradient = "linear-gradient(135deg, #dc3545, #e83e8c)"
-                                    emoji = "🔴"
+                                recommendation_data.append({
+                                    '순위': f"{i + 1}위",
+                                    '티커': rec['ticker'],
+                                    '점수': f"{rec['score']:.1f}",
+                                    'PER': f"{ratios.get('PER', 'N/A'):.1f}" if ratios.get('PER') != 'N/A' and ratios.get('PER') is not None else 'N/A',
+                                    'PBR': f"{ratios.get('PBR', 'N/A'):.1f}" if ratios.get('PBR') != 'N/A' and ratios.get('PBR') is not None else 'N/A',
+                                    'ROE(%)': f"{ratios.get('ROE', 'N/A')*100:.1f}" if ratios.get('ROE') != 'N/A' and ratios.get('ROE') is not None else 'N/A',
+                                    '배당률(%)': f"{ratios.get('배당수익률', 'N/A'):.2f}" if ratios.get('배당수익률') != 'N/A' and ratios.get('배당수익률') is not None else 'N/A',
+                                    '현재가': f"${ratios.get('현재가', 'N/A')}" if ratios.get('현재가') != 'N/A' else 'N/A'
+                                })
+                            
+                            df_custom_recommendations = pd.DataFrame(recommendation_data)
+                            st.dataframe(df_custom_recommendations, hide_index=True, use_container_width=True, height=400)
+                            
+                            # 시각화
+                            col1, col2 = st.columns([2, 1])
+                            
+                            with col1:
+                                # 추천 점수 차트
+                                colors = []
+                                for rec in custom_recommendations:
+                                    score = rec['score']
+                                    if score >= 80:
+                                        colors.append('#28a745')
+                                    elif score >= 60:
+                                        colors.append('#fd7e14')
+                                    else:
+                                        colors.append('#dc3545')
                                 
-                                rank_suffix = ["st", "nd", "rd", "th", "th"][i]
+                                fig_custom = go.Figure(data=go.Bar(
+                                    x=[rec['ticker'] for rec in custom_recommendations],
+                                    y=[rec['score'] for rec in custom_recommendations],
+                                    marker_color=colors,
+                                    text=[f"{rec['score']:.1f}" for rec in custom_recommendations],
+                                    textposition='outside'
+                                ))
+                                
+                                fig_custom.update_layout(
+                                    title="🤖 AI 커스텀 전략 점수",
+                                    yaxis_range=[0, 100],
+                                    height=450,
+                                    showlegend=False
+                                )
+                                
+                                st.plotly_chart(fig_custom, use_container_width=True)
+                            
+                            with col2:
+                                # 분석 요약
+                                avg_score = sum([rec['score'] for rec in custom_recommendations]) / len(custom_recommendations)
+                                high_grade_count = len([rec for rec in custom_recommendations if rec['score'] >= 70])
                                 
                                 st.markdown(f"""
-                                <div style="background: {gradient}; color: white; text-align: center; 
-                                            padding: 1.5rem; border-radius: 15px; margin-bottom: 1rem;
-                                            box-shadow: 0 4px 15px rgba(0,0,0,0.2); transform: scale(1.02);">
-                                    <div style="font-size: 1.5rem; margin-bottom: 0.5rem;">{emoji}</div>
-                                    <h3 style="margin: 0.5rem 0; font-size: 1.3rem;">{ticker}</h3>
-                                    <div style="font-size: 2rem; font-weight: bold; margin: 0.5rem 0;">{score:.1f}</div>
-                                    <small style="opacity: 0.9;">{i+1}{rank_suffix} 순위</small>
+                                <div style="background: linear-gradient(135deg, #f8f9fa, #e9ecef); 
+                                            padding: 2rem; border-radius: 15px; margin-top: 1rem;">
+                                    <h4 style="color: #495057; text-align: center; margin-bottom: 1.5rem;">
+                                        📊 분석 요약
+                                    </h4>
                                 </div>
                                 """, unsafe_allow_html=True)
-                        
-                        # 전체 결과 테이블
-                        st.markdown("### 📊 상세 분석 결과")
-                        
-                        recommendation_data = []
-                        for i, rec in enumerate(custom_recommendations):
-                            ratios = rec['ratios']
-                            
-                            recommendation_data.append({
-                                '순위': f"{i + 1}위",
-                                '티커': rec['ticker'],
-                                '점수': f"{rec['score']:.1f}",
-                                'PER': f"{ratios.get('PER', 'N/A'):.1f}" if ratios.get('PER') != 'N/A' and ratios.get('PER') is not None else 'N/A',
-                                'PBR': f"{ratios.get('PBR', 'N/A'):.1f}" if ratios.get('PBR') != 'N/A' and ratios.get('PBR') is not None else 'N/A',
-                                'ROE(%)': f"{ratios.get('ROE', 'N/A')*100:.1f}" if ratios.get('ROE') != 'N/A' and ratios.get('ROE') is not None else 'N/A',
-                                '배당률(%)': f"{ratios.get('배당수익률', 'N/A'):.2f}" if ratios.get('배당수익률') != 'N/A' and ratios.get('배당수익률') is not None else 'N/A',
-                                '현재가': f"${ratios.get('현재가', 'N/A')}" if ratios.get('현재가') != 'N/A' else 'N/A'
-                            })
-                        
-                        df_custom_recommendations = pd.DataFrame(recommendation_data)
-                        st.dataframe(df_custom_recommendations, hide_index=True, use_container_width=True, height=400)
-                        
-                        # 시각화
-                        col1, col2 = st.columns([2, 1])
-                        
-                        with col1:
-                            # 추천 점수 차트
-                            colors = []
-                            for rec in custom_recommendations:
-                                score = rec['score']
-                                if score >= 80:
-                                    colors.append('#28a745')
-                                elif score >= 60:
-                                    colors.append('#fd7e14')
-                                else:
-                                    colors.append('#dc3545')
-                            
-                            fig_custom = go.Figure(data=go.Bar(
-                                x=[rec['ticker'] for rec in custom_recommendations],
-                                y=[rec['score'] for rec in custom_recommendations],
-                                marker_color=colors,
-                                text=[f"{rec['score']:.1f}" for rec in custom_recommendations],
-                                textposition='outside'
-                            ))
-                            
-                            fig_custom.update_layout(
-                                title="🤖 AI 커스텀 전략 점수",
-                                yaxis_range=[0, 100],
-                                height=450,
-                                showlegend=False
-                            )
-                            
-                            st.plotly_chart(fig_custom, use_container_width=True)
-                        
-                        with col2:
-                            # 분석 요약
-                            avg_score = sum([rec['score'] for rec in custom_recommendations]) / len(custom_recommendations)
-                            high_grade_count = len([rec for rec in custom_recommendations if rec['score'] >= 70])
-                            
-                            st.markdown(f"""
-                            <div style="background: linear-gradient(135deg, #f8f9fa, #e9ecef); 
-                                        padding: 2rem; border-radius: 15px; margin-top: 1rem;">
-                                <h4 style="color: #495057; text-align: center; margin-bottom: 1.5rem;">
-                                    📊 분석 요약
-                                </h4>
-                            </div>
-                            """, unsafe_allow_html=True)
-                            
-                            st.markdown(f"""
-                            <div style="text-align: center; margin-bottom: 1rem;">
-                                <div style="font-size: 2rem; font-weight: bold; color: #28a745;">
-                                    {avg_score:.1f}
+                                
+                                st.markdown(f"""
+                                <div style="text-align: center; margin-bottom: 1rem;">
+                                    <div style="font-size: 2rem; font-weight: bold; color: #28a745;">
+                                        {avg_score:.1f}
+                                    </div>
+                                    <small style="color: #6c757d;">평균 점수</small>
                                 </div>
-                                <small style="color: #6c757d;">평균 점수</small>
-                            </div>
-                            """, unsafe_allow_html=True)
-                            
-                            st.markdown(f"""
-                            <div style="text-align: center; margin-bottom: 1rem;">
-                                <div style="font-size: 1.5rem; font-weight: bold; color: #28a745;">
-                                    {high_grade_count}개
+                                """, unsafe_allow_html=True)
+                                
+                                st.markdown(f"""
+                                <div style="text-align: center; margin-bottom: 1rem;">
+                                    <div style="font-size: 1.5rem; font-weight: bold; color: #28a745;">
+                                        {high_grade_count}개
+                                    </div>
+                                    <small style="color: #6c757d;">우수 등급 (70점 이상)</small>
                                 </div>
-                                <small style="color: #6c757d;">우수 등급 (70점 이상)</small>
-                            </div>
-                            """, unsafe_allow_html=True)
-                            
-                            st.markdown(f"""
-                            <div style="text-align: center;">
-                                <div style="font-size: 1.5rem; font-weight: bold; color: #17a2b8;">
-                                    {len(custom_recommendations)}개
+                                """, unsafe_allow_html=True)
+                                
+                                st.markdown(f"""
+                                <div style="text-align: center;">
+                                    <div style="font-size: 1.5rem; font-weight: bold; color: #17a2b8;">
+                                        {len(custom_recommendations)}개
+                                    </div>
+                                    <small style="color: #6c757d;">총 분석 종목</small>
                                 </div>
-                                <small style="color: #6c757d;">총 분석 종목</small>
-                            </div>
-                            """, unsafe_allow_html=True)
- 
+                                """, unsafe_allow_html=True) 

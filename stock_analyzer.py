@@ -34,13 +34,10 @@ class StockAnalyzer:
                 genai.configure(api_key=api_key)
                 self.model = genai.GenerativeModel('gemini-2.5-flash')
                 self.gemini_available = True
-                print("✅ Gemini API 성공적으로 초기화됨")
             else:
                 self.gemini_available = False
-                print("⚠️ Gemini API 키가 설정되지 않았습니다. 자연어 분석 기능이 비활성화됩니다.")
         except Exception as e:
             self.gemini_available = False
-            print(f"❌ Gemini API 초기화 실패: {e}")
     
     def _get_cache_path(self, ticker, data_type="info"):
         """캐시 파일 경로 생성"""
