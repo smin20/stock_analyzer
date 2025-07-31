@@ -763,6 +763,126 @@ class StockAnalyzer:
         except Exception as e:
             print(f"❌ Gemini API 분석 실패: {e}")
             return None
+
+    def get_suitable_tickers_for_strategy(self, user_input, available_tickers=None):
+        """자연어 전략을 분석하여 적합한 종목들을 LLM이 직접 추천"""
+        if not self.gemini_available:
+            # Gemini가 없으면 기본 대형주 반환
+            default_tickers = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "NFLX", 
+                              "CRM", "ADBE", "JPM", "JNJ", "PG", "KO", "V", "MA", "HD", "UNH", "PFE", "WMT"]
+            return default_tickers[:15]
+        
+        if available_tickers is None:
+            # 기본 종목 풀 (주요 S&P 500 종목들)
+            available_tickers = [
+                "AAPL", "MSFT", "GOOGL", "GOOG", "AMZN", "NVDA", "TSLA", "META", "BRK-B", "UNH",
+                "JNJ", "XOM", "JPM", "V", "PG", "MA", "CVX", "HD", "ABBV", "PFE", "KO", "PEP",
+                "AVGO", "TMO", "COST", "WMT", "MRK", "BAC", "NFLX", "CRM", "ACN", "LLY", "ORCL",
+                "ADBE", "DHR", "ABT", "VZ", "NKE", "TXN", "QCOM", "RTX", "PM", "NEE", "HON",
+                "UPS", "LOW", "IBM", "AMGN", "MDT", "GS", "T", "BMY", "C", "CHTR", "CVS",
+                "CAT", "MO", "BA", "GE", "MMM", "GILD", "USB", "AXP", "DE", "INTC", "SPGI",
+                "BLK", "AMD", "ISRG", "NOW", "INTU", "ZTS", "SYK", "BSX", "CME", "MU",
+                "REGN", "ADI", "TMUS", "PYPL", "AON", "EL", "DUK", "PLD", "SO", "SHW",
+                "CI", "TJX", "ICE", "EQIX", "PGR", "CL", "NOC", "MMC", "COF", "EMR",
+                "FCX", "NSC", "DG", "ROST", "PSA", "ITW", "GM", "TGT", "ECL", "HUM",
+                "KLAC", "APD", "AMT", "WFC", "LRCX", "CDNS", "KMB", "SNPS", "GIS", "MCD"
+            ]
+        
+        try:
+            # 티커 리스트를 문자열로 변환
+            ticker_list_str = ", ".join(available_tickers)
+            
+            prompt = f"""
+당신은 전문 투자 분석가입니다. 사용자의 투자 전략에 가장 적합한 종목들을 선별해주세요.
+
+사용자 투자 전략: "{user_input}"
+
+다음 종목 풀에서 사용자 전략에 가장 적합한 15-20개 종목을 선별하세요:
+{ticker_list_str}
+
+선별 기준:
+1. 사용자가 언급한 구체적인 조건들 (PER, PBR, ROE, 배당수익률, 부채비율 등)
+2. 투자 스타일 (가치투자, 성장투자, 배당투자, 안정성 중시 등)
+3. 섹터 선호도 (기술주, 금융주, 헬스케어, 소비재 등)
+4. 시가총액 선호도 (대형주, 중형주)
+
+다음 JSON 형태로만 응답하세요 (설명이나 주석 없이):
+{{
+    "recommended_tickers": ["AAPL", "MSFT", "GOOGL", ...],
+    "reasoning": "선별 이유 간단 설명",
+    "strategy_focus": "가치/성장/배당/품질 등 주요 전략"
+}}
+
+*** 선별 예시 ***
+1. "배당수익률 3% 이상인 안정 대형주" 
+   → 배당 우수한 대형주: JNJ, PG, KO, PEP, VZ, T, XOM, CVX 등
+
+2. "PER 15 이하 가치주"
+   → 저평가된 가치주: BAC, WFC, XOM, CVX, GM, F 등
+
+3. "ROE 20% 이상 고수익성 기업"
+   → 고수익성 기업: AAPL, MSFT, NVDA, GOOGL, META 등
+
+4. "성장 가능성 높은 기술주"
+   → 성장 기술주: NVDA, GOOGL, MSFT, CRM, NOW, AMD 등
+
+5. "안정적인 헬스케어주"
+   → 헬스케어: JNJ, UNH, PFE, ABBV, TMO, DHR, ABT 등
+
+사용자 전략에 정확히 맞는 종목들을 선별하되, 다양성도 고려하세요.
+"""
+            
+            response = self.model.generate_content(prompt)
+            response_text = response.text.strip()
+            
+            # 코드 블록 제거
+            if '```json' in response_text:
+                response_text = response_text.split('```json')[1].split('```')[0]
+            elif '```' in response_text:
+                response_text = response_text.split('```')[1].split('```')[0]
+            
+            # JSON 파싱
+            result = json.loads(response_text)
+            
+            recommended_tickers = result.get('recommended_tickers', [])
+            reasoning = result.get('reasoning', '')
+            strategy_focus = result.get('strategy_focus', '')
+            
+            # 유효한 티커들만 필터링
+            valid_tickers = [ticker for ticker in recommended_tickers if ticker in available_tickers]
+            
+            print(f"✅ LLM 종목 선별 완료: {len(valid_tickers)}개 종목")
+            print(f"📊 선별 이유: {reasoning}")
+            print(f"🎯 전략 포커스: {strategy_focus}")
+            
+            return {
+                'tickers': valid_tickers[:20],  # 최대 20개로 제한
+                'reasoning': reasoning,
+                'strategy_focus': strategy_focus
+            }
+            
+        except json.JSONDecodeError as e:
+            print(f"❌ JSON 파싱 오류: {e}")
+            print(f"응답 텍스트: {response_text[:200]}...")
+            # 오류 시 기본 종목들 반환
+            default_tickers = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "NFLX", 
+                              "CRM", "ADBE", "JPM", "JNJ", "PG", "KO", "V", "MA", "HD", "UNH", "PFE", "WMT"]
+            return {
+                'tickers': default_tickers,
+                'reasoning': 'LLM 분석 실패로 기본 대형주 선별',
+                'strategy_focus': '종합'
+            }
+            
+        except Exception as e:
+            print(f"❌ LLM 종목 선별 실패: {e}")
+            # 오류 시 기본 종목들 반환
+            default_tickers = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "NFLX", 
+                              "CRM", "ADBE", "JPM", "JNJ", "PG", "KO", "V", "MA", "HD", "UNH", "PFE", "WMT"]
+            return {
+                'tickers': default_tickers,
+                'reasoning': 'LLM 분석 실패로 기본 대형주 선별',
+                'strategy_focus': '종합'
+            }
     
 
     def _meets_required_criteria(self, ratios, strategy_config):
