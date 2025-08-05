@@ -139,7 +139,7 @@ st.markdown("""
 
 # 애플리케이션 초기화
 @st.cache_resource
-def get_analyzer(version="v8"):  # 버전을 업데이트하여 캐시 무효화
+def get_analyzer(version="v9"):  # 버전을 업데이트하여 캐시 무효화
     # Streamlit Cloud secrets에서 API 키 가져오기
     try:
         api_key = st.secrets.get("GEMINI_API_KEY", None)
@@ -218,6 +218,10 @@ with tab1:
     </div>
     """, unsafe_allow_html=True)
     
+    # natural_language_prompt 초기화 (전역 변수로)
+    if 'natural_language_prompt' not in st.session_state:
+        st.session_state.natural_language_prompt = ""
+    
     # 입력 섹션을 카드 스타일로 개선
     col1, col2 = st.columns([1, 1])
     
@@ -284,10 +288,6 @@ with tab1:
         </div>
         """, unsafe_allow_html=True)
         
-        # session_state 초기화
-        if 'natural_language_prompt' not in st.session_state:
-            st.session_state.natural_language_prompt = ""
-        
         # 예시 관점들
         st.markdown("💡 **예시 관점들:**")
         example_prompts = [
@@ -326,7 +326,8 @@ with tab1:
     if analyze_btn and ticker:
         with st.spinner(f"📡 {ticker} 데이터 수집 및 분석 중..."):
             if analyzer.get_stock_info(ticker):
-                # 자연어 관점이 있으면 전달, 없으면 None
+                # 자연어 관점이 있으면 전달, 없으면 None (session_state에서 안전하게 가져오기)
+                natural_language_prompt = st.session_state.get('natural_language_prompt', '')
                 nl_prompt = natural_language_prompt.strip() if natural_language_prompt and natural_language_prompt.strip() else None
                 recommendation = analyzer.get_recommendation(ticker, nl_prompt)
                 
