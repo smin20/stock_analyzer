@@ -195,7 +195,7 @@ class StockAnalyzer:
         
         return deleted_count
     
-    def calculate_financial_ratios(self, ticker):
+    def calculate_financial_ratios(self, ticker, natural_language_prompt=None):
         """주요 재무비율 계산"""
         if ticker not in self.stock_data:
             print(f"{ticker} 데이터가 없습니다. 먼저 get_stock_info()를 실행하세요.")
@@ -229,7 +229,18 @@ class StockAnalyzer:
             ratios['수익성_점수'] = self._calculate_profitability_score(ratios)
             ratios['안정성_점수'] = self._calculate_stability_score(ratios)
             ratios['가치평가_점수'] = self._calculate_valuation_score(ratios)
-            ratios['종합_점수'] = round((ratios['수익성_점수'] + ratios['안정성_점수'] + ratios['가치평가_점수']) / 3, 1)
+            
+            # 자연어 평가 점수 계산
+            if natural_language_prompt:
+                ratios['자연어평가_점수'] = self._calculate_natural_language_score(ticker, ratios, natural_language_prompt)
+                ratios['자연어평가_관점'] = natural_language_prompt
+                # 5개 항목으로 종합점수 계산
+                ratios['종합_점수'] = round((ratios['수익성_점수'] + ratios['안정성_점수'] + ratios['가치평가_점수'] + ratios['자연어평가_점수']) / 4, 1)
+            else:
+                ratios['자연어평가_점수'] = 0
+                ratios['자연어평가_관점'] = None
+                # 기존 3개 항목으로 종합점수 계산
+                ratios['종합_점수'] = round((ratios['수익성_점수'] + ratios['안정성_점수'] + ratios['가치평가_점수']) / 3, 1)
             
         except Exception as e:
             print(f"재무비율 계산 중 오류: {e}")
@@ -316,9 +327,77 @@ class StockAnalyzer:
                 
         return max(0, min(100, score))
     
-    def get_recommendation(self, ticker):
+    def _calculate_natural_language_score(self, ticker, ratios, natural_language_prompt):
+        """자연어 관점 기반 점수 계산 (0-100)"""
+        if not self.gemini_available:
+            return 50  # 기본값 반환
+        
+        try:
+            # 업종 정보 가져오기
+            sector_info = self.get_sector_info(ticker)
+            sector_context = ""
+            if sector_info and sector_info['sector'] != 'N/A':
+                sector_averages = self.get_sector_averages(sector_info['sector'])
+                sector_context = f"""
+업종 정보:
+- 업종: {sector_info['sector']}
+- 업종 평균 PER: {sector_averages['avg_per']}
+- 업종 평균 PBR: {sector_averages['avg_pbr']}
+- 업종 평균 ROE: {sector_averages['avg_roe']*100}%
+"""
+            
+            prompt = f"""
+당신은 전문 주식 분석가입니다. 다음 관점에서 {ticker} 종목을 0-100점으로 평가해주세요:
+
+**평가 관점**: "{natural_language_prompt}"
+
+**종목 정보**:
+- 현재가: ${ratios.get('현재가', 'N/A')}
+- 시가총액: ${ratios.get('시가총액', 'N/A')}
+- PER: {ratios.get('PER', 'N/A')}
+- PBR: {ratios.get('PBR', 'N/A')}
+- PSR: {ratios.get('PSR', 'N/A')}
+- ROE: {ratios.get('ROE', 'N/A')*100 if ratios.get('ROE') != 'N/A' and ratios.get('ROE') is not None else 'N/A'}%
+- ROA: {ratios.get('ROA', 'N/A')*100 if ratios.get('ROA') != 'N/A' and ratios.get('ROA') is not None else 'N/A'}%
+- 부채비율: {ratios.get('부채비율', 'N/A')}
+- 배당수익률: {ratios.get('배당수익률', 'N/A')}%
+- 52주 고점 대비: {ratios.get('52주_고점대비', 'N/A')}%
+{sector_context}
+
+**평가 기준**:
+- 100점: 해당 관점에서 매우 우수
+- 80-99점: 해당 관점에서 우수
+- 60-79점: 해당 관점에서 양호
+- 40-59점: 해당 관점에서 보통
+- 20-39점: 해당 관점에서 미흡
+- 0-19점: 해당 관점에서 매우 미흡
+
+**주의사항**:
+1. 제시된 관점에만 집중해서 평가하세요
+2. 숫자 점수만 반환하세요 (0-100 사이의 정수)
+3. 설명이나 다른 텍스트는 포함하지 마세요
+
+점수:"""
+            
+            response = self.model.generate_content(prompt)
+            response_text = response.text.strip()
+            
+            # 응답에서 숫자만 추출
+            import re
+            numbers = re.findall(r'\d+', response_text)
+            if numbers:
+                score = int(numbers[0])
+                return max(0, min(100, score))
+            else:
+                return 50  # 파싱 실패 시 기본값
+                
+        except Exception as e:
+            print(f"❌ 자연어 평가 점수 계산 실패: {e}")
+            return 50  # 오류 시 기본값
+    
+    def get_recommendation(self, ticker, natural_language_prompt=None):
         """종목 추천 의견 생성"""
-        ratios = self.calculate_financial_ratios(ticker)
+        ratios = self.calculate_financial_ratios(ticker, natural_language_prompt)
         if not ratios:
             return None
             
@@ -622,6 +701,244 @@ class StockAnalyzer:
             print(f"   최고가 대비: {ratios.get('52주_고점대비', 'N/A')}%")
             print(f"   최저가 대비: {ratios.get('52주_저점대비', 'N/A')}%")
     
+    def get_sector_info(self, ticker):
+        """업종 정보 가져오기"""
+        if ticker not in self.stock_data:
+            return None
+            
+        data = self.stock_data[ticker]
+        info = data['info']
+        
+        sector = info.get('sector', 'N/A')
+        industry = info.get('industry', 'N/A')
+        
+        return {
+            'sector': sector,
+            'industry': industry
+        }
+    
+    def get_sector_averages(self, sector):
+        """업종별 평균 지표 (간단한 업종별 평균치 제공)"""
+        # 주요 업종별 평균 PER/PBR (2024년 기준 대략적인 수치)
+        sector_averages = {
+            'Technology': {'avg_per': 25.0, 'avg_pbr': 4.5, 'avg_roe': 0.18},
+            'Healthcare': {'avg_per': 22.0, 'avg_pbr': 3.2, 'avg_roe': 0.15},
+            'Financial Services': {'avg_per': 12.0, 'avg_pbr': 1.2, 'avg_roe': 0.12},
+            'Consumer Discretionary': {'avg_per': 20.0, 'avg_pbr': 2.8, 'avg_roe': 0.14},
+            'Consumer Staples': {'avg_per': 18.0, 'avg_pbr': 2.5, 'avg_roe': 0.16},
+            'Energy': {'avg_per': 14.0, 'avg_pbr': 1.8, 'avg_roe': 0.10},
+            'Industrials': {'avg_per': 16.0, 'avg_pbr': 2.2, 'avg_roe': 0.13},
+            'Materials': {'avg_per': 15.0, 'avg_pbr': 1.9, 'avg_roe': 0.11},
+            'Utilities': {'avg_per': 17.0, 'avg_pbr': 1.5, 'avg_roe': 0.09},
+            'Real Estate': {'avg_per': 19.0, 'avg_pbr': 1.4, 'avg_roe': 0.08},
+            'Communication Services': {'avg_per': 21.0, 'avg_pbr': 3.0, 'avg_roe': 0.16}
+        }
+        
+        return sector_averages.get(sector, {'avg_per': 18.0, 'avg_pbr': 2.5, 'avg_roe': 0.14})
+    
+    def get_natural_language_investment_opinion(self, ticker, natural_language_prompt=None):
+        """자연어 기반 투자 의견 생성"""
+        if not self.gemini_available:
+            return "Gemini API가 설정되지 않아 투자 의견을 생성할 수 없습니다."
+        
+        try:
+            # 재무 데이터 가져오기
+            ratios = self.calculate_financial_ratios(ticker)
+            if not ratios:
+                return "재무 데이터를 가져올 수 없어 투자 의견을 생성할 수 없습니다."
+            
+            # 업종 정보 가져오기
+            sector_info = self.get_sector_info(ticker)
+            sector_averages = None
+            
+            if sector_info and sector_info['sector'] != 'N/A':
+                sector_averages = self.get_sector_averages(sector_info['sector'])
+            
+            # 업종 비교 분석 텍스트 생성
+            sector_comparison = ""
+            if sector_averages:
+                per = ratios.get('PER', 'N/A')
+                pbr = ratios.get('PBR', 'N/A')
+                roe = ratios.get('ROE', 'N/A')
+                
+                sector_comparison = f"""
+업종 비교:
+- 업종: {sector_info['sector']}
+- PER: {per} (업종평균: {sector_averages['avg_per']})
+- PBR: {pbr} (업종평균: {sector_averages['avg_pbr']})
+- ROE: {roe*100 if roe != 'N/A' and roe is not None else 'N/A'}% (업종평균: {sector_averages['avg_roe']*100}%)
+"""
+            
+            # 자연어 관점 요청이 있으면 추가
+            natural_language_section = ""
+            if natural_language_prompt and natural_language_prompt.strip():
+                prompt_lower = natural_language_prompt.lower()
+                
+                # 배당 관련 키워드 확인
+                dividend_keywords = ['배당', 'dividend', '디비던드', '배당금', '배당수익률']
+                is_dividend_focused = any(keyword in prompt_lower for keyword in dividend_keywords)
+                
+                # ESG 관련 키워드 확인
+                esg_keywords = ['esg', '환경', '지배구조', '사회', '지속가능', '윤리', '책임경영']
+                is_esg_focused = any(keyword in prompt_lower for keyword in esg_keywords)
+                
+                # 성장성 관련 키워드 확인
+                growth_keywords = ['성장', '성장성', 'growth', '확장', '발전', '혁신', '미래']
+                is_growth_focused = any(keyword in prompt_lower for keyword in growth_keywords)
+                
+                # 안정성 관련 키워드 확인
+                stability_keywords = ['안정', '안정성', 'stability', '리스크', '위험', '부채', '재무건전성']
+                is_stability_focused = any(keyword in prompt_lower for keyword in stability_keywords)
+                
+                # 밸류에이션 관련 키워드 확인
+                valuation_keywords = ['밸류', '가치', 'valuation', 'per', 'pbr', '저평가', '고평가', '적정가']
+                is_valuation_focused = any(keyword in prompt_lower for keyword in valuation_keywords)
+                
+                if is_dividend_focused:
+                    dividend_yield = ratios.get('배당수익률', 'N/A')
+                    dividend_info = f"\n- 현재 배당수익률: {dividend_yield:.2f}%" if dividend_yield != 'N/A' and dividend_yield is not None else "\n- 배당수익률: 정보 없음"
+                    
+                    natural_language_section = f"""
+
+특별 요청 관점: "{natural_language_prompt}"
+{dividend_info}
+
+배당 투자 관점에서 다음 사항들을 중심으로 평가해주세요:
+- 현재 배당수익률의 매력도 (업종 평균 대비)
+- 배당 지속가능성 (부채비율, 수익성 기반)
+- 배당 정책의 안정성
+위 관점에서의 상세한 평가를 포함해서 답변해주세요.
+"""
+                
+                elif is_esg_focused:
+                    natural_language_section = f"""
+
+특별 요청 관점: "{natural_language_prompt}"
+
+ESG 관점에서 다음 사항들을 중심으로 평가해주세요:
+- 기업의 지배구조 및 경영 투명성
+- 환경 및 사회적 책임 경영 수준
+- 지속가능한 성장 가능성
+- 현재 재무 지표가 ESG 경영과 어떻게 연관되는지
+위 관점에서의 평가를 포함해서 답변해주세요.
+"""
+                
+                elif is_growth_focused:
+                    price_vs_high = ratios.get('52주_고점대비', 'N/A')
+                    roe = ratios.get('ROE', 'N/A')
+                    roe_display = f"{roe*100:.1f}%" if roe != 'N/A' and roe is not None else "정보 없음"
+                    growth_info = f"""
+- 52주 최고가 대비: {price_vs_high}%
+- ROE (수익성 지표): {roe_display}"""
+                    
+                    natural_language_section = f"""
+
+특별 요청 관점: "{natural_language_prompt}"
+{growth_info}
+
+성장성 관점에서 다음 사항들을 중심으로 평가해주세요:
+- 업종 대비 성장 잠재력
+- 수익성 지표(ROE, ROA)의 성장 가능성
+- 현재 밸류에이션이 성장성을 반영하고 있는지
+- 향후 확장 및 혁신 가능성
+위 관점에서의 평가를 포함해서 답변해주세요.
+"""
+                
+                elif is_stability_focused:
+                    debt_ratio = ratios.get('부채비율', 'N/A')
+                    stability_info = f"\n- 부채비율: {debt_ratio:.1f}" if debt_ratio != 'N/A' and debt_ratio is not None else "\n- 부채비율: 정보 없음"
+                    
+                    natural_language_section = f"""
+
+특별 요청 관점: "{natural_language_prompt}"
+{stability_info}
+
+재무 안정성 관점에서 다음 사항들을 중심으로 평가해주세요:
+- 부채비율과 재무건전성
+- 수익성의 지속가능성
+- 시장 변동성에 대한 안정성
+- 리스크 대비 수익률의 적정성
+위 관점에서의 평가를 포함해서 답변해주세요.
+"""
+                
+                elif is_valuation_focused:
+                    per = ratios.get('PER', 'N/A')
+                    pbr = ratios.get('PBR', 'N/A')
+                    valuation_info = f"""
+- PER: {per} (업종평균: {sector_averages.get('avg_per', 'N/A') if sector_averages else 'N/A'})
+- PBR: {pbr} (업종평균: {sector_averages.get('avg_pbr', 'N/A') if sector_averages else 'N/A'})"""
+                    
+                    natural_language_section = f"""
+
+특별 요청 관점: "{natural_language_prompt}"
+{valuation_info}
+
+밸류에이션 관점에서 다음 사항들을 중심으로 평가해주세요:
+- 업종 평균 대비 밸류에이션 수준
+- PER, PBR 등 주요 지표의 적정성
+- 현재 가격의 매력도 (저평가/적정가/고평가)
+- 향후 재평가 가능성
+위 관점에서의 평가를 포함해서 답변해주세요.
+"""
+                
+                else:
+                    natural_language_section = f"""
+
+특별 요청 관점: "{natural_language_prompt}"
+위 관점에서의 평가도 포함해서 답변해주세요.
+"""
+            
+            prompt = f"""
+당신은 전문 투자 분석가입니다. {ticker} 종목에 대한 2-3줄의 간결한 투자 의견을 작성해주세요.
+
+재무 지표:
+- 현재가: ${ratios.get('현재가', 'N/A')}
+- PER: {ratios.get('PER', 'N/A')}
+- PBR: {ratios.get('PBR', 'N/A')}
+- ROE: {ratios.get('ROE', 'N/A')*100 if ratios.get('ROE') != 'N/A' and ratios.get('ROE') is not None else 'N/A'}%
+- 부채비율: {ratios.get('부채비율', 'N/A')}
+- 배당수익률: {ratios.get('배당수익률', 'N/A')}%
+- 52주 고점 대비: {ratios.get('52주_고점대비', 'N/A')}%
+
+{sector_comparison}
+
+점수:
+- 수익성 점수: {ratios.get('수익성_점수', 0)}/100
+- 안정성 점수: {ratios.get('안정성_점수', 0)}/100
+- 가치평가 점수: {ratios.get('가치평가_점수', 0)}/100
+- 종합 점수: {ratios.get('종합_점수', 0)}/100
+{natural_language_section}
+
+다음 가이드라인을 따라주세요:
+1. 업종 평균 대비 상대적 평가를 포함해주세요
+2. 핵심 강점과 약점을 간결하게 언급해주세요  
+3. 투자 포인트나 주의사항을 제시해주세요
+4. 특별 요청 관점이 있으면 해당 관점에서의 평가도 포함해주세요
+5. 2-3줄로 간결하게 작성해주세요
+6. 투자 권유나 단정적 표현은 피하고 분석적 관점으로 작성해주세요
+
+예시: "업종 평균 PER 대비 할인된 가격에 거래되고 있으며, ROE가 양호해 수익성이 우수합니다. 다만 부채비율이 다소 높아 재무 안정성 측면에서 주의가 필요합니다."
+
+{ticker} 투자 의견:
+"""
+            
+            response = self.model.generate_content(prompt)
+            response_text = response.text.strip()
+            
+            # 응답 정리
+            lines = response_text.split('\n')
+            filtered_lines = [line.strip() for line in lines if line.strip() and not line.strip().startswith('#')]
+            
+            # 2-3줄로 제한
+            if len(filtered_lines) > 3:
+                filtered_lines = filtered_lines[:3]
+            
+            return ' '.join(filtered_lines)
+            
+        except Exception as e:
+            print(f"❌ 투자 의견 생성 실패: {e}")
+            return "투자 의견을 생성하는 중 오류가 발생했습니다."
+
     def get_company_description(self, ticker):
         """Gemini AI를 사용한 회사 설명 생성"""
         if not self.gemini_available:

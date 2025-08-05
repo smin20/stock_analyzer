@@ -139,7 +139,7 @@ st.markdown("""
 
 # 애플리케이션 초기화
 @st.cache_resource
-def get_analyzer(version="v4"):  # 버전을 업데이트하여 캐시 무효화
+def get_analyzer(version="v8"):  # 버전을 업데이트하여 캐시 무효화
     # Streamlit Cloud secrets에서 API 키 가져오기
     try:
         api_key = st.secrets.get("GEMINI_API_KEY", None)
@@ -276,41 +276,59 @@ with tab1:
     
     with col2:
         st.markdown("""
-        <div style="background: linear-gradient(135deg, #fff3cd, #ffeaa7); 
+        <div style="background: linear-gradient(135deg, #e8f5e8, #c8e6c9); 
                     padding: 2rem; border-radius: 15px; margin-bottom: 1rem;">
-            <h3 style="color: #856404; margin-bottom: 1.5rem; text-align: center;">
-                ⭐ 인기 종목 바로가기
+            <h3 style="color: #2e7d32; margin-bottom: 1.5rem; text-align: center;">
+                🤖 AI 맞춤 평가
             </h3>
         </div>
         """, unsafe_allow_html=True)
         
-        # 인기 종목을 더 예쁜 버튼으로 만들기
-        popular_stocks = [
-            {"ticker": "AAPL", "name": "애플", "color": "#007AFF", "icon": "🍎"},
-            {"ticker": "MSFT", "name": "마이크로소프트", "color": "#00BCF2", "icon": "💻"},
-            {"ticker": "GOOGL", "name": "구글", "color": "#4285F4", "icon": "🔍"},
-            {"ticker": "AMZN", "name": "아마존", "color": "#FF9900", "icon": "📦"},
-            {"ticker": "TSLA", "name": "테슬라", "color": "#CC0000", "icon": "🚗"},
-            {"ticker": "NVDA", "name": "엔비디아", "color": "#76B900", "icon": "🎮"},
-            {"ticker": "META", "name": "메타", "color": "#1877F2", "icon": "📱"},
-            {"ticker": "NFLX", "name": "넷플릭스", "color": "#E50914", "icon": "🎬"}
+        # session_state 초기화
+        if 'natural_language_prompt' not in st.session_state:
+            st.session_state.natural_language_prompt = ""
+        
+        # 예시 관점들
+        st.markdown("💡 **예시 관점들:**")
+        example_prompts = [
+            "ESG 경영 관점",
+            "업종 대비 성장성",
+            "배당 투자 관점", 
+            "재무 안정성 중심",
+            "기술 혁신 역량",
+            "밸류에이션 매력도"
         ]
         
         cols = st.columns(2)
-        for i, stock in enumerate(popular_stocks):
+        for i, prompt in enumerate(example_prompts):
             with cols[i % 2]:
                 if st.button(
-                    f"{stock['icon']} {stock['ticker']}\n{stock['name']}", 
-                    key=f"pop_{stock['ticker']}",
+                    f"💡 {prompt}",
+                    key=f"example_{i}",
                     use_container_width=True
                 ):
-                    ticker = stock['ticker']
-                    analyze_btn = True
+                    st.session_state.natural_language_prompt = f"{prompt}에서 평가해주세요"
+                    st.rerun()
+        
+        # 자연어 평가 관점 입력
+        natural_language_prompt = st.text_area(
+            "📝 평가 관점 입력",
+            value=st.session_state.natural_language_prompt,
+            placeholder="예: ESG 경영 관점에서 평가해주세요\n업종 대비 성장성을 중심으로 분석해주세요\n배당 투자 관점에서 어떤지 평가해주세요",
+            height=120,
+            help="어떤 관점에서 종목을 평가하고 싶은지 자유롭게 입력하세요",
+            key="natural_prompt_input"
+        )
+        
+        # 입력창의 값이 변경되면 session_state도 업데이트
+        st.session_state.natural_language_prompt = natural_language_prompt
     
     if analyze_btn and ticker:
         with st.spinner(f"📡 {ticker} 데이터 수집 및 분석 중..."):
             if analyzer.get_stock_info(ticker):
-                recommendation = analyzer.get_recommendation(ticker)
+                # 자연어 관점이 있으면 전달, 없으면 None
+                nl_prompt = natural_language_prompt.strip() if natural_language_prompt and natural_language_prompt.strip() else None
+                recommendation = analyzer.get_recommendation(ticker, nl_prompt)
                 
                 if recommendation:
                     ratios = recommendation['ratios']
@@ -340,6 +358,27 @@ with tab1:
                         </h4>
                         <p style="color: #6c757d; font-size: 1.1rem; line-height: 1.6; margin: 0;">
                             {company_description}
+                        </p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # 자연어 기반 투자 의견 추가
+                    with st.spinner(f"🤖 {ticker} AI 투자 의견 생성 중..."):
+                        investment_opinion = analyzer.get_natural_language_investment_opinion(ticker, nl_prompt)
+                    
+                    st.markdown(f"""
+                    <div style="background: linear-gradient(135deg, #e3f2fd, #bbdefb); 
+                                padding: 1.5rem; border-radius: 15px; margin: 1.5rem 0; 
+                                border-left: 4px solid #2196f3;">
+                        <h4 style="color: #1565c0; margin-bottom: 1rem; display: flex; align-items: center;">
+                            <span style="margin-right: 0.5rem;">🤖</span>
+                            AI 투자 의견
+                        </h4>
+                        <p style="color: #1976d2; font-size: 1.1rem; line-height: 1.6; margin: 0; font-weight: 500;">
+                            {investment_opinion}
+                        </p>
+                        <p style="color: #64b5f6; font-size: 0.9rem; margin-top: 0.8rem; font-style: italic;">
+                            ※ 이 의견은 업종별 평균 대비 분석을 포함한 AI 생성 내용으로, 투자 결정의 참고용입니다.
                         </p>
                     </div>
                     """, unsafe_allow_html=True)
@@ -449,16 +488,27 @@ with tab1:
                         
                         # 점수 차트
                         st.subheader("📊 세부 점수")
+                        
+                        # 기본 3개 점수
                         scores = {
                             '수익성': ratios.get('수익성_점수', 0),
                             '안정성': ratios.get('안정성_점수', 0),
                             '가치평가': ratios.get('가치평가_점수', 0)
                         }
+                        colors = ['#1f77b4', '#ff7f0e', '#2ca02c']
+                        
+                        # 자연어 평가가 있으면 추가
+                        natural_score = ratios.get('자연어평가_점수', 0)
+                        natural_perspective = ratios.get('자연어평가_관점', None)
+                        
+                        if natural_score > 0 and natural_perspective:
+                            scores['AI맞춤평가'] = natural_score
+                            colors.append('#9c27b0')  # 보라색
                         
                         fig = go.Figure(data=go.Bar(
                             x=list(scores.keys()),
                             y=list(scores.values()),
-                            marker_color=['#1f77b4', '#ff7f0e', '#2ca02c']
+                            marker_color=colors
                         ))
                         
                         fig.update_layout(
